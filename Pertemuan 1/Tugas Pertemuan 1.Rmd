@@ -1,0 +1,504 @@
+---
+title: "Tugas Pertemuan 1"
+author: "Dahayu Salsabila"
+date: "26 Agustus 2026"
+output:
+  rmdformats::readthedown:
+    toc_depth: 2
+    self_contained: true
+    highlight: tango
+  html_document:
+    toc_depth: '2'
+    df_print: paged
+---
+```{r}
+library(rio)
+library("forecast")
+library("graphics")
+library("TTR")
+library("TSA")
+library("ggplot2")
+```
+## Import & bersihkan data
+```{r}
+data1 <- import("https://raw.githubusercontent.com/dahayysl/MPDW/refs/heads/main/Pertemuan%201/Cabai%20Merah.csv")
+
+tail(data1)
+```
+
+```{r}
+data1.ts <- ts(data1$Harga) # Mengubah data agar terbaca sebagai data deret waktu
+
+data1.ts
+```
+
+```{r}
+summary(data1.ts)
+```
+## Membuat plot data deret waktu
+```{r}
+ts.plot(data1.ts, xlab="Time Period ", ylab="Chili Price", 
+        main = "Time Series Plot of Chili Price")
+points(data1.ts, col = "red", pch = 16)
+```
+# Single Moving Average & Double Moving Average
+## Pembagian Data
+```{r}
+# Hitung jumlah data
+n <- nrow(data1)
+
+# Tentukan batas 80% data training
+n_train <- floor(0.8 * n)
+
+# Bagi data menjadi training dan testing
+training_ma <- data1[1:n_train, ]
+testing_ma  <- data1[(n_train+1):n, ]
+
+# ubah ke time series
+train_ma.ts <- ts(training_ma$Harga)
+test_ma.ts  <- ts(testing_ma$Harga)
+```
+
+## Eksplorasi data latih
+```{r}
+plot(train_ma.ts, xlab = "Time Period ", ylab="Chili Price", col="maroon", main="Plot data latih", pch = 16)
+points(train_ma.ts)
+```
+## Eksplorasi data uji
+```{r}
+plot(test_ma.ts, xlab = "Time Period ", ylab="Chili Price", col="purple", main="Plot data uji")
+points(test_ma.ts)
+```
+## SMA
+```{r}
+data.sma<-SMA(train_ma.ts, n=3)
+data.sma
+```
+```{r}
+data.ramal<-c(NA,data.sma)
+data.ramal #forecast 1 periode ke depan
+```
+```{r}
+data.gab <- cbind(
+  aktual    = c(train_ma.ts),
+  pemulusan = c(data.sma),
+  ramalan   = c(data.ramal[1:length(train_ma.ts)])
+)
+
+data.gab
+```
+## Plot data deret waktu dari hasil peramalan
+```{r}
+# Plot data aktual (data latih)
+ts.plot(train_ma.ts, 
+        xlab = "Time Period", 
+        ylab = "Chili Price", 
+        main = "SMA N=3 Data Harga Cabai Merah")
+points(train_ma.ts)
+
+lines(data.gab[,2], col = "green", lwd = 2)
+lines(data.gab[,3], col = "red", lwd = 2)
+
+legend("topleft", 
+       legend = c("Data Aktual", "Data Pemulusan", "Data Peramalan"), 
+       lty = 8, 
+       col = c("black", "green", "red"), 
+       cex = 0.5)
+```
+## Menghitung Error
+```{r}
+error_train.sma = train_ma.ts-data.ramal[1:length(train_ma.ts)]
+
+SSE_train.sma = sum(error_train.sma[5:length(train_ma.ts)]^2)
+MSE_train.sma = mean(error_train.sma[5:length(train_ma.ts)]^2)
+MAPE_train.sma = mean(abs((error_train.sma[5:length(train_ma.ts)]/train_ma.ts[5:length(train_ma.ts)])*100))
+
+akurasi_train.sma <- matrix(c(SSE_train.sma, MSE_train.sma, MAPE_train.sma))
+row.names(akurasi_train.sma)<- c("SSE", "MSE", "MAPE")
+colnames(akurasi_train.sma) <- c("Akurasi n = 3")
+akurasi_train.sma
+```
+Dalam hal ini nilai MAPE data latih pada metode pemulusan SMA sekitar 5%, nilai ini dapat dikategorikan sebagai nilai akurasi yang sangat baik. Selanjutnya dilakukan perhitungan nilai MAPE data uji pada metode pemulusan SMA.
+
+```{r}
+# Nilai peramalan SMA untuk data uji menggunakan nilai rata-rata terakhir dari data latih
+ramalan_test <- rep(data.sma[length(train_ma.ts)], length(test_ma.ts))
+error_test.sma <- test_ma.ts - ramalan_test
+
+SSE_test.sma  <- sum(error_test.sma^2) # # Menghitung ukuran kebaikan model (SSE, MSE, MAPE)
+MSE_test.sma  <- mean(error_test.sma^2)
+MAPE_test.sma <- mean(abs(error_test.sma / test_ma.ts) * 100)
+
+akurasi_test.sma <- matrix(c(SSE_test.sma, MSE_test.sma, MAPE_test.sma))
+row.names(akurasi_test.sma) <- c("SSE", "MSE", "MAPE")
+colnames(akurasi_test.sma)  <- c("Akurasi n = 3")
+
+akurasi_test.sma
+```
+Perhitungan akurasi menggunakan data latih menghasilkan nilai MAPE yang kurang dari 10% sehingga nilai akurasi ini dapat dikategorikan sebagai sangat baik.
+
+## DMA
+```{r}
+dma <- SMA(data.sma, n = 3)
+At <- 2 * data.sma - dma
+Bt <- (2 / (3 - 1)) * (data.sma - dma)
+data.dma <- At + Bt
+data.ramal2 <- c(NA, data.dma)
+
+t <- 1:length(test_ma.ts) # t = 1 sampai 20
+f <- c()
+
+for (i in t) {
+  f[i] <- At[length(At)] + Bt[length(Bt)] * i
+}
+
+data.gab2 <- cbind(
+  aktual     = c(train_ma.ts, rep(NA, length(test_ma.ts))), 
+  pemulusan1 = c(data.sma, rep(NA, length(test_ma.ts))),
+  pemulusan2 = c(dma, rep(NA, length(test_ma.ts))),
+  At         = c(At, rep(NA, length(test_ma.ts))), 
+  Bt         = c(Bt, rep(NA, length(test_ma.ts))),
+  ramalan    = c(data.ramal2[1:length(train_ma.ts)], f)
+)
+
+data.gab2
+```
+## Plot data deret waktu dari hasil peramalan
+```{r}
+ts.plot(train_ma.ts, 
+        xlab = "Time Period", 
+        ylab = "Chili Price", 
+        main = "DMA N=3 Data Harga Cabai Merah",
+        ylim = c(min(train_ma.ts, na.rm = TRUE) - 2, max(train_ma.ts, na.rm = TRUE) + 2))
+points(train_ma.ts)
+
+lines(data.gab2[, 3], col = "green", lwd = 2)             
+lines(data.gab2[1:80, 6], col = "red", lwd = 2, lty = 2)
+
+legend("topleft", 
+       legend = c("Data Aktual", "Data Pemulusan", "Data Peramalan"), 
+       lty = c(1, 1, 2), 
+       col = c("black", "green", "red"), 
+       lwd = c(1, 2, 2),
+       cex = 0.8)
+```
+## Menghitung error
+```{r}
+error_train.dma <- train_ma.ts - data.ramal2[1:length(train_ma.ts)]
+
+SSE_train.dma  <- sum(error_train.dma[6:length(train_ma.ts)]^2)
+MSE_train.dma  <- mean(error_train.dma[6:length(train_ma.ts)]^2)
+MAPE_train.dma <- mean(abs(error_train.dma[6:length(train_ma.ts)] / train_ma.ts[6:length(train_ma.ts)]) * 100)
+
+akurasi_train.dma <- matrix(c(SSE_train.dma, MSE_train.dma, MAPE_train.dma))
+row.names(akurasi_train.dma) <- c("SSE", "MSE", "MAPE")
+colnames(akurasi_train.dma)  <- c("Akurasi n = 3")
+
+akurasi_train.dma
+```
+Perhitungan akurasi pada data latih menggunakan nilai MAPE menghasilkan nilai MAPE yang kurang dari 10% sehingga dikategorikan sangat baik. Selanjutnya, perhitungan nilai akurasi dilakukan pada data uji.
+
+```{r}
+ramalan_test.dma <- data.gab2[81:100, 6]
+error_test.dma <- test_ma.ts - ramalan_test.dma
+
+SSE_test.dma  <- sum(error_test.dma^2)
+MSE_test.dma  <- mean(error_test.dma^2)
+MAPE_test.dma <- mean(abs(error_test.dma / test_ma.ts) * 100)
+
+akurasi_test.dma <- matrix(c(SSE_test.dma, MSE_test.dma, MAPE_test.dma))
+row.names(akurasi_test.dma) <- c("SSE", "MSE", "MAPE")
+colnames(akurasi_test.dma)  <- c("Akurasi n = 3")
+
+akurasi_test.dma
+```
+Perhitungan akurasi menggunakan data uji pada metode Double Moving Average (DMA) menghasilkan nilai MAPE sebesar 11.26% (berada di antara 10% hingga 20%), sehingga nilai akurasi ini dapat dikategorikan sebagai baik.
+
+Pada data latih dan data uji, metode SMA lebih baik dibandingkan dengan metode DMA.
+
+# Single Exponential Smoothing & Double Exponential Smoothing
+```{r}
+ses.model <- ses(train_ma.ts, h = length(test_ma.ts))
+summary(ses.model)
+```
+```{r}
+ses.fitted <- ses.model$fitted   
+ses.fq     <- ses.model$mean
+
+data.gab.ses <- cbind(
+  aktual    = c(train_ma.ts, test_ma.ts),
+  pemulusan = c(ses.fitted, rep(NA, length(test_ma.ts))),
+  ramalan   = c(rep(NA, length(train_ma.ts)), ses.fq)
+)
+
+data.gab.ses
+```
+## Eksplorasi data
+```{r}
+plot(data1.ts, col = "maroon", main = "Plot Data Harga Cabai", ylab = "Chili Price", xlab = "Time Period")
+points(data1.ts)
+```
+## Eksplorasi data latih
+```{r}
+plot(train_ma.ts, col = "orange", main = "Plot Data Latih", ylab = "Chili Price", xlab = "Time Period")
+points(train_ma.ts)
+```
+## Plot data uji
+```{r}
+plot(test_ma.ts, col = "red", main = "Plot Data Uji", ylab = "Chili Price", xlab = "Time Period")
+points(test_ma.ts)
+```
+## SES
+```{r}
+ses.data <- ses(train_ma.ts, h = length(test_ma.ts), alpha = 0.2)
+plot(ses.data, main = "Single Exponential Smoothing (Alpha = 0.2)", ylab = "Chili Price", xlab = "Time Period")
+```
+```{r}
+ses.data
+```
+```{r}
+autoplot(ses.data) +
+  autolayer(fitted(ses.data), series="Fitted") +
+  ylab("Chili Price") + xlab("Time Period")
+```
+```{r}
+ses1 <- HoltWinters(train_ma.ts, gamma = FALSE, beta = FALSE, alpha = 0.2)
+plot(ses1, main = "HoltWinters SES (Alpha = 0.2)", ylab = "Chili Price", xlab = "Time period")
+```
+```{r}
+ramalan1 <- forecast(ses1, h = length(test_ma.ts))
+ramalan1
+```
+```{r}
+plot(ramalan1, main = "Hasil Peramalan SES (Alpha = 0.2)", ylab = "Chili Price", xlab = "Time Period")
+```
+
+```{r}
+ses2<- HoltWinters(train_ma.ts, gamma = FALSE, beta = FALSE, alpha = 0.9)
+plot(ses2, main = "HoltWinters SES (Alpha = 0.9)", ylab = "Chili Price", xlab = "Time period")
+```
+```{r}
+ramalan2 <- forecast(ses2, h = length(test_ma.ts))
+ramalan2
+```
+```{r}
+plot(ramalan2, main = "Hasil Peramalan SES (Alpha = 0.9)", ylab = "Chili Price", xlab = "Time Period")
+```
+## SES optimum
+```{r}
+ses.opt <- ses(train_ma.ts, h = length(test_ma.ts), alpha = NULL)
+plot(ses.opt, main = "SES dengan Alpha Optimum", ylab = "Chili Price", xlab = "Time Period")
+```
+```{r}
+ses.opt
+```
+```{r}
+HWopt <- HoltWinters(train_ma.ts, gamma = FALSE, beta = FALSE, alpha = NULL)
+HWopt
+```
+```{r}
+plot(HWopt, main = "HoltWinters SES Alpha Optimum", ylab = "Chili Price", xlab = "Time Period")
+```
+```{r}
+ramalanopt <- forecast(HWopt, h = length(test_ma.ts))
+ramalanopt
+```
+```{r}
+plot(ramalanopt, main = "Hasil Peramalan SES Alpha Optimum", ylab = "Chili Price", xlab = "Time Period")
+```
+## Akurasi Data Latih
+```{r}
+train.ts <- ts(data1$Harga[1:80])
+train.ts <- ts(data1[1:80, 1])
+# SES dengan alpha = 0.2
+SSE1<-ses1$SSE
+MSE1<-ses1$SSE/length(train.ts)
+RMSE1<-sqrt(MSE1)
+
+akurasi1 <- matrix(c(SSE1,MSE1,RMSE1))
+row.names(akurasi1)<- c("SSE", "MSE", "RMSE")
+colnames(akurasi1) <- c("Akurasi lamda=0.2")
+akurasi1
+```
+```{r}
+# SES dengan alpha = 0.9
+SSE2<-ses2$SSE
+MSE2<-ses2$SSE/length(train.ts)
+RMSE2<-sqrt(MSE2)
+
+akurasi2 <- matrix(c(SSE2,MSE2,RMSE2))
+row.names(akurasi2)<- c("SSE", "MSE", "RMSE")
+colnames(akurasi2) <- c("Akurasi lamda=0.9")
+akurasi2
+```
+Berdasarkan nilai SSE, MSE, dan RMSE di antara kedua parameter, nilai parameter $\alpha = 0,9$ menghasilkan akurasi yang lebih baik dibanding $\alpha = 0,2$. Hal ini dilihat dari nilai masing-masing ukuran akurasi yang lebih kecil. Berdasarkan nilai RMSE-nya, hasil ini dapat dikategorikan sebagai peramalan sangat baik.
+
+## Akurasi data uji
+```{r}
+n_test <- length(test_ma.ts)
+
+e1   <- as.numeric(ramalan1$mean)[1:n_test] - as.numeric(test_ma.ts) # Menghitung Error
+e2   <- as.numeric(ramalan2$mean)[1:n_test] - as.numeric(test_ma.ts)
+eopt <- as.numeric(ramalanopt$mean)[1:n_test] - as.numeric(test_ma.ts)
+
+SSEtesting1  <- sum(e1^2, na.rm = TRUE) # Ukuran Kebaikan Model untuk Alpha = 0.2
+MSEtesting1  <- mean(e1^2, na.rm = TRUE)
+RMSEtesting1 <- sqrt(MSEtesting1)
+MAPEtesting1 <- mean(abs(e1 / as.numeric(test_ma.ts)) * 100, na.rm = TRUE)
+
+SSEtesting2  <- sum(e2^2, na.rm = TRUE) # Ukuran Kebaikan Model untuk Alpha = 0.9
+MSEtesting2  <- mean(e2^2, na.rm = TRUE)
+RMSEtesting2 <- sqrt(MSEtesting2)
+MAPEtesting2 <- mean(abs(e2 / as.numeric(test_ma.ts)) * 100, na.rm = TRUE)
+
+SSEtestingopt  <- sum(eopt^2, na.rm = TRUE) # Ukuran Kebaikan Model untuk Alpha Optimum
+MSEtestingopt  <- mean(eopt^2, na.rm = TRUE)
+RMSEtestingopt <- sqrt(MSEtestingopt)
+MAPEtestingopt <- mean(abs(eopt / as.numeric(test_ma.ts)) * 100, na.rm = TRUE)
+
+# Tabel ringkas
+akurasitesting_ses <- matrix(
+  c(SSEtesting1, MSEtesting1, RMSEtesting1, MAPEtesting1,
+    SSEtesting2, MSEtesting2, RMSEtesting2, MAPEtesting2,
+    SSEtestingopt, MSEtestingopt, RMSEtestingopt, MAPEtestingopt),
+  nrow = 4,
+  byrow = FALSE,
+  dimnames = list(c("SSE", "MSE", "RMSE", "MAPE (%)"), 
+                  c("Alpha = 0.2", "Alpha = 0.9", "Alpha Optimum"))
+)
+
+akurasitesting_ses
+```
+Berdasarkan nilai SSE, MSE, RMSE, dan MAPE pada data uji, nilai parameter $/Alpha = 0.9$ menghasilkan akurasi yang paling baik dibandingkan parameter $/Alpha = 0.2$ maupun Alpha Optimum.
+
+## DES
+```{r}
+des.1 <- HoltWinters(train_ma.ts, gamma = FALSE, alpha = 0.2, beta = 0.2)
+plot(des.1, main = "DES Holt (Alpha = 0.2, Beta = 0.2)", ylab = "Chili Price", xlab = "Time Period")
+```
+```{r}
+ramalandes1 <- forecast(des.1, h = length(test_ma.ts))
+ramalandes1
+```
+```{r}
+plot(ramalandes1, main = "Hasil Peramalan DES (Alpha = 0.2, Beta = 0.2)", ylab = "Chili Price", xlab = "Time Period")
+```
+```{r}
+des.2 <- HoltWinters(train_ma.ts, gamma = FALSE, alpha = 0.6, beta = 0.3) # DES dengan Alpha = 0.6 dan Beta = 0.3
+plot(des.2, main = "DES Holt (Alpha = 0.6, Beta = 0.3)", ylab = "Chili Price", xlab = "Time Period")
+```
+```{r}
+ramalandes2 <- forecast(des.2, h = length(test_ma.ts))
+ramalandes2
+```
+```{r}
+plot(ramalandes2, main = "Hasil Peramalan DES (Alpha = 0.6, Beta = 0.3)", ylab = "Chili Price", xlab = "Time Period")
+```
+## membandingkan plot data latih dan data uji
+```{r}
+plot(data1.ts,
+     main = "DES Holt (Alpha = 0.2, Beta = 0.2)", 
+     ylab = "Harga", 
+     xlab = "Periode Waktu")
+
+lines(des.1$fitted[,1], lty=2, col="blue")
+lines(ramalandes1$mean, col="red")
+
+legend("topleft", 
+       legend = c("Data Aktual", "Data Pemulusan", "Data Peramalan"), 
+       lty = c(1, 2, 1), 
+       col = c("black", "blue", "red"))
+```
+##  nilai parameter optimum dari DES
+```{r}
+des.opt <- HoltWinters(train_ma.ts, gamma = FALSE)
+des.opt
+```
+```{r}
+plot(des.opt, main = "DES Holt Parameter Optimum", ylab = "Chili Price", xlab = "Time Period")
+```
+```{r}
+ramalandesopt <- forecast(des.opt, h = length(test_ma.ts))
+ramalandesopt
+```
+```{r}
+plot(ramalandesopt, main = "Hasil Peramalan DES Parameter Optimum", ylab = "Chili Price", xlab = "Time Period")
+```
+## Akurasi data latih
+```{r}
+ssedes.train1  <- des.1$SSE
+msedes.train1  <- ssedes.train1 / length(train_ma.ts)
+rmsedes.train1 <- sqrt(msedes.train1)
+mapedes.train1 <- mean(abs(residuals(des.1) / train_ma.ts) * 100, na.rm = TRUE)
+
+ssedes.train2  <- des.2$SSE
+msedes.train2  <- ssedes.train2 / length(train_ma.ts)
+rmsedes.train2 <- sqrt(msedes.train2)
+mapedes.train2 <- mean(abs(residuals(des.2) / train_ma.ts) * 100, na.rm = TRUE)
+
+ssedes.trainopt  <- des.opt$SSE
+msedes.trainopt  <- ssedes.trainopt / length(train_ma.ts)
+rmsedes.trainopt <- sqrt(msedes.trainopt)
+mapedes.trainopt <- mean(abs(residuals(des.opt) / train_ma.ts) * 100, na.rm = TRUE)
+
+# Tabel Ringkas
+akurasitrain_des <- matrix(
+  c(ssedes.train1, msedes.train1, rmsedes.train1, mapedes.train1,
+    ssedes.train2, msedes.train2, rmsedes.train2, mapedes.train2,
+    ssedes.trainopt, msedes.trainopt, rmsedes.trainopt, mapedes.trainopt),
+  nrow = 4,
+  byrow = FALSE,
+  dimnames = list(c("SSE", "MSE", "RMSE", "MAPE (%)"), 
+                  c("Alpha=0.2 & Beta=0.2", "Alpha=0.6 & Beta=0.3", "DES Optimum"))
+)
+
+akurasitrain_des
+```
+Hasil akurasi dari data latih didapatkan model DES Optimum memiliki hasil yang lebih baik. Namun untuk kedua model lainnya dapat dikategorikan peramalan sangat baik berdasarkan nilai MAPE-nya.
+
+## Akurasi data uji
+```{r}
+selisihdes1   <- as.numeric(ramalandes1$mean) - as.numeric(test_ma.ts)
+selisihdes2   <- as.numeric(ramalandes2$mean) - as.numeric(test_ma.ts)
+selisihdesopt <- as.numeric(ramalandesopt$mean) - as.numeric(test_ma.ts)
+
+SSEtestingdes1  <- sum(selisihdes1^2, na.rm = TRUE) # (Alpha = 0.2, Beta = 0.2)
+MSEtestingdes1  <- mean(selisihdes1^2, na.rm = TRUE)
+RMSEtestingdes1 <- sqrt(MSEtestingdes1)
+MAPEtestingdes1 <- mean(abs(selisihdes1 / as.numeric(test_ma.ts)) * 100, na.rm = TRUE)
+
+SSEtestingdes2  <- sum(selisihdes2^2, na.rm = TRUE) # (Alpha = 0.6, Beta = 0.3)
+MSEtestingdes2  <- mean(selisihdes2^2, na.rm = TRUE)
+RMSEtestingdes2 <- sqrt(MSEtestingdes2)
+MAPEtestingdes2 <- mean(abs(selisihdes2 / as.numeric(test_ma.ts)) * 100, na.rm = TRUE)
+
+SSEtestingdesopt  <- sum(selisihdesopt^2, na.rm = TRUE) # DES Optimum
+MSEtestingdesopt  <- mean(selisihdesopt^2, na.rm = TRUE)
+RMSEtestingdesopt <- sqrt(MSEtestingdesopt)
+MAPEtestingdesopt <- mean(abs(selisihdesopt / as.numeric(test_ma.ts)) * 100, na.rm = TRUE)
+
+# Tabel Ringkas
+akurasitestingdes <- matrix(
+  c(SSEtestingdes1, MSEtestingdes1, RMSEtestingdes1, MAPEtestingdes1,
+    SSEtestingdes2, MSEtestingdes2, RMSEtestingdes2, MAPEtestingdes2,
+    SSEtestingdesopt, MSEtestingdesopt, RMSEtestingdesopt, MAPEtestingdesopt),
+  nrow = 4,
+  byrow = FALSE,
+  dimnames = list(c("SSE", "MSE", "RMSE", "MAPE (%)"), 
+                  c("Alpha=0.2 & Beta=0.2", "Alpha=0.6 & Beta=0.3", "DES Optimum"))
+)
+
+akurasitestingdes
+```
+Hasil akurasi dari data uji didapatkan model DES dengan $\alpha = 0.6$ dan $\beta = 0.3$ Optimum memiliki hasil yang lebih baik. Namun untuk kedua model lainnya dapat dikategorikan peramalan sangat baik berdasarkan nilai MAPE-nya.
+
+# Perbandingan SES dan DES
+```{r}
+MSEfull <-
+  matrix(c(MSEtesting1,MSEtesting2,MSEtestingopt,MSEtestingdes1,MSEtestingdes2,
+           MSEtestingdesopt),nrow=3,ncol=2)
+row.names(MSEfull)<- c("ske 1", "ske 2", "ske opt")
+colnames(MSEfull) <- c("ses","des")
+MSEfull
+```
+
