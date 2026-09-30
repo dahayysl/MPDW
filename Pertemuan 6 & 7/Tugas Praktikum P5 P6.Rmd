@@ -1,0 +1,457 @@
+---
+title: "Tugas Praktikum P6 P7"
+author: "Dahayu Salsabila"
+date: "30 September 2026"
+output:
+  html_document:
+    toc_depth: '2'
+    df_print: paged
+  rmdformats::readthedown:
+    toc_depth: 3
+    self_contained: true
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Package
+```{r}
+library(ggplot2)
+library(tseries)
+library(MASS)
+library(forecast)
+library(TTR)
+library(lmtest)
+library(car)
+```
+# Import Data
+```{r}
+cabai <- read.csv("D://Semester 5//MPDW//tugas//Praktikum//100 data cabai merah.csv", sep = ";", dec = ".")
+cabai$Tanggal <- as.Date(cabai$Tanggal, format = "%d/%m/%Y")
+
+cabai
+```
+
+# Pengecekan Data
+```{r}
+str(cabai)
+dim(cabai)     
+```
+```{r}
+# Cek data hilang & duplikat tanggal
+colSums(is.na(cabai))
+sum(duplicated(cabai$Tanggal))
+```
+
+```{r}
+# Cek jarak antar tanggal (data hanya hari kerja, jadi ada loncatan akhir pekan)
+table(as.numeric(diff(cabai$Tanggal)))
+# Jarak 1 = hari kerja berurutan, 3 = melewati akhir pekan, >3 = libur nasional.
+# Data dianggap deret berurutan tanpa musiman.
+```
+terdapat 79 pasangan tanggal yang berjarak 1 hari atau berurutan di hari kerja. Selain itu, ada 19 pasangan tanggal yang berjarak 3 hari karena terhalang akhir pekan, serta 1 pasangan tanggal yang berjarak 6 hari karena melewati akhir pekan ditambah libur nasional.
+
+Berdasarkan hasil pengecekan data, terdapat 100 observasi harga cabai merah dan tidak ditemukan adanya data hilang maupun duplikasi tanggal. Jarak antarobservasi terutama mengikuti hari kerja, dengan beberapa jeda akibat akhir pekan dan hari libur. Oleh karena itu, data selanjutnya diperlakukan sebagai deret waktu berdasarkan urutan pengamatan.
+
+```{r}
+cabai.ts <- ts(cabai$Harga)
+```
+
+# Eksplorasi Data
+```{r}
+summary(cabai$Harga)
+sd(cabai$Harga)
+var(cabai$Harga)
+sd(cabai$Harga) / mean(cabai$Harga) * 100   # koefisien keragaman (%)
+range(cabai$Harga)
+cabai[which.max(cabai$Harga), ]             # harga tertinggi
+cabai[which.min(cabai$Harga), ]             # harga terendah
+```
+Berdasarkan statistik deskriptif, harga cabai merah memiliki rata-rata sebesar 48,36 ribu/kg dengan median sebesar 49,00 ribu/kg. Nilai mean yang relatif dekat dengan median menunjukkan bahwa pusat data berada di sekitar 48–49 ribu/kg. Harga terendah sebesar 36,85 ribu/kg dan harga tertinggi sebesar 69,55 ribu/kg menunjukkan adanya rentang harga sebesar 32,70 ribu/kg. Simpangan baku sebesar 4,79 menunjukkan adanya variasi harga di sekitar rata-ratanya, sedangkan koefisien variasi sebesar 9,90% menunjukkan bahwa variasi relatif terhadap rata-rata tidak terlalu besar secara keseluruhan.
+
+```{r}
+plot.ts(cabai.ts, lty = 1, xlab = "Waktu", ylab = "Harga (Rp ribu/kg)",
+        main = "Plot Data Harga Cabai Merah")
+```
+
+```{r}
+ggplot(cabai, aes(x = Tanggal, y = Harga)) +
+  geom_line(color = "navyblue") +
+  geom_point(color = "navyblue", size = 1.2) +
+  labs(title = "Harga Cabai Merah",
+       x = "Tanggal", y = "Harga (Rp ribu/kg)") +
+  theme_minimal()
+```
+Grafik deret waktu menunjukkan bahwa harga cabai merah mengalami fluktuasi dari waktu ke waktu. Pada awal periode, harga cenderung berada pada tingkat yang relatif tinggi, kemudian mengalami penurunan dan beberapa kali kenaikan serta penurunan kembali. Terdapat perubahan harga yang cukup tajam pada beberapa periode, sehingga pola data belum menunjukkan kestabilan rata-rata sepanjang waktu. Kondisi tersebut menjadi indikasi bahwa data perlu diperiksa lebih lanjut terkait stasioneritas sebelum dilakukan pemodelan ARIMA.
+
+## Pencilan
+```{r}
+boxplot(cabai$Harga, col = "lightblue", main = "Boxplot Harga Cabai Merah",
+        ylab = "Harga")
+boxplot.stats(cabai$Harga)$out                 # nilai pencilan
+idx.out <- which(cabai$Harga %in% boxplot.stats(cabai$Harga)$out)
+cabai[idx.out, ]                               # tanggal & harga pencilan
+```
+Boxplot menunjukkan adanya pengamatan yang relatif ekstrem dibandingkan sebagian besar data. Pencilan tersebut berkaitan dengan perubahan harga yang cukup besar pada periode tertentu. Keberadaan pencilan perlu diperhatikan karena dapat memengaruhi distribusi residual dan hasil pengujian asumsi, tetapi pencilan tidak langsung dihapus karena dapat merepresentasikan kondisi nyata pada harga cabai.
+
+```{r}
+sel <- diff(cabai$Harga) # Selisih harga antar hari
+head(sort(abs(sel), decreasing = TRUE), 6)
+cabai[which(abs(sel) > 10) + 1, ]
+
+ggplot(cabai, aes(x = Tanggal, y = Harga)) + # Tandai pencilan pada plot
+  geom_line(color = "grey40") +
+  geom_point(color = "navyblue", size = 1.2) +
+  geom_point(data = cabai[idx.out, ], color = "red", size = 3) +
+  labs(title = "Titik Pencilan (merah)", x = "Tanggal", y = "Harga") +
+  theme_minimal()
+```
+
+## Sebaran Data
+```{r}
+hist(cabai$Harga, breaks = 15, col = "lightblue", border = "white",
+     main = "Histogram Harga Cabai Merah", xlab = "Harga")
+plot(density(cabai$Harga), main = "Kepekatan Harga Cabai Merah")
+```
+
+# Pembangkitan Data Latih dan Uji (80:20)
+```{r}
+train      <- cabai$Harga[1:80]
+test       <- cabai$Harga[81:100]
+train.ts   <- ts(train)
+test.ts    <- ts(test, start = 81)
+c(latih = length(train), uji = length(test))
+```
+Data dibagi menjadi 80 observasi sebagai data latih dan 20 observasi sebagai data uji.
+
+## Plot pembagian data
+```{r}
+split.df <- data.frame(
+  Waktu = 1:100,
+  Harga = cabai$Harga,
+  Data  = rep(c("Latih", "Uji"), c(80, 20))
+)
+ggplot(split.df, aes(x = Waktu, y = Harga, color = Data)) +
+  geom_line() + geom_point(size = 1) +
+  geom_vline(xintercept = 80 + 0.5, linetype = "dashed") +
+  scale_color_manual(values = c("Latih" = "navyblue", "Uji" = "red")) +
+  labs(title = "Pembagian Data Latih dan Data Uji") +
+  theme_minimal()
+```
+
+## Plot Data Latih
+```{r}
+plot.ts(train.ts, lty = 1, xlab = "Waktu", ylab = "Harga",
+        main = "Plot Data Latih Harga Cabai Merah")
+summary(train)
+```
+
+## Plot Data Uji
+```{r}
+plot.ts(test.ts, lty = 1, xlab = "Waktu", ylab = "Harga",
+        main = "Plot Data Uji Harga Cabai Merah")
+summary(test)
+```
+
+## Rataan Bergerak
+```{r}
+sma5  <- SMA(train.ts, n = 5)
+sma10 <- SMA(train.ts, n = 10)
+plot.ts(train.ts, col = "grey50", xlab = "Waktu", ylab = "Harga",
+        main = "Data Latih dan Rataan Bergerak")
+lines(sma5,  col = "blue", lwd = 2)
+lines(sma10, col = "red",  lwd = 2)
+legend("topright", legend = c("Aktual", "SMA 5", "SMA 10"),
+       col = c("grey50", "blue", "red"), lty = 1, lwd = c(1, 2, 2), bty = "n")
+```
+Plot menunjukkan bahwa harga aktual mengalami fluktuasi yang cukup besar. SMA 5 lebih responsif dalam mengikuti perubahan harga dibandingkan SMA 10 karena menggunakan periode yang lebih pendek. Sebaliknya, SMA 10 menghasilkan garis yang lebih halus tetapi memiliki lag yang lebih besar terhadap perubahan aktual. Pada lonjakan harga yang ekstrem, kedua rataan bergerak tidak dapat mengikuti perubahan aktual secara langsung karena proses perataan.
+
+# Uji Stasioneritas Data Latih
+## Plot ACF
+```{r}
+acf(train.ts, lag.max = 20, main = "ACF Data Latih")
+```
+## Uji ADF
+```{r}
+# H0 : data tidak stasioner dalam rataan
+# H1 : data stasioner dalam rataan
+tseries::adf.test(train.ts)
+```
+# Uji KPSS (Pembanding)
+```{r}
+# H0 : data stasioner; berlawanan dengan ADF
+tseries::kpss.test(train.ts)
+```
+Berdasarkan uji ADF pada data awal, diperoleh p-value sebesar 0,07219 yang lebih besar dari taraf signifikansi 5%, sehingga belum terdapat cukup bukti untuk menyatakan bahwa data telah stasioner. Sebagai pembanding, uji KPSS menghasilkan p-value sebesar 0,1 sehingga hipotesis nol bahwa data stasioner tidak ditolak. Meskipun hasil kedua pengujian memberikan indikasi yang berbeda, analisis selanjutnya menggunakan differencing pertama untuk memperoleh deret yang lebih sesuai untuk pemodelan ARIMA.
+
+## Box-Cox
+```{r}
+index <- seq(1:length(train.ts))
+bc <- boxcox(train.ts ~ index, lambda = seq(-2, 2, by = 0.1))
+
+lambda_opt <- bc$x[which.max(bc$y)]
+lambda_opt
+ci_lambda <- bc$x[bc$y > max(bc$y) - 0.5 * qchisq(0.95, 1)]
+c(Batas_Bawah = min(ci_lambda), Batas_Atas = max(ci_lambda))
+```
+Hasil Box-Cox pada data awal menunjukkan nilai λ optimum sebesar -2. Namun, setelah dilakukan differencing pertama, nilai λ optimum berubah menjadi sekitar 1,19 dengan interval kepercayaan sekitar 0,99–1,47.
+
+## Differencing
+```{r}
+train.diff <- diff(train.ts, differences = 1)
+
+plot.ts(train.diff, lty = 1, xlab = "Waktu", ylab = "Diff-1 Harga",
+        main = "Plot Differencing Pertama")
+abline(h = 0, col = "red", lty = 2)
+```
+## Plot ACF
+```{r}
+acf(train.diff, lag.max = 20, main = "ACF Differencing Pertama")
+```
+
+## ADF
+```{r}
+tseries::adf.test(train.diff)
+```
+Setelah dilakukan differencing pertama, hasil uji ADF menghasilkan statistik Dickey-Fuller sebesar -5,0272 dengan p-value 0,01. Karena p-value lebih kecil dari 0,05, hipotesis nol bahwa data tidak stasioner ditolak. Dengan demikian, data hasil differencing pertama dapat dianggap telah stasioner. Oleh karena itu, orde differencing yang digunakan dalam model ARIMA adalah d = 1.
+
+## Box-Cox Setelah Differencing 
+```{r}
+index.diff <- seq(1:length(train.diff))
+min.val <- min(train.diff)
+if (min.val <= 0) {
+  const <- abs(min.val) + 1
+  train.diff.shift <- train.diff + const
+} else {
+  train.diff.shift <- train.diff
+}
+bc.diff <- boxcox(train.diff.shift ~ index.diff, lambda = seq(-2, 2, by = 0.1))
+lambda_opt_diff <- bc.diff$x[which.max(bc.diff$y)]
+print(paste("Lambda optimum setelah diff:", lambda_opt_diff))
+ci.diff <- bc.diff$x[bc.diff$y > max(bc.diff$y) - 0.5 * qchisq(0.95, 1)]
+c(Batas_Bawah = min(ci.diff), Batas_Atas = max(ci.diff))
+
+```
+# Identifikasi Model
+## Plot ACF
+```{r}
+acf(train.diff, lag.max = 20, main = "ACF Diff-1")
+# ACF cuts off di lag 1 dan PACF tails off -> ARIMA(0,1,1)
+```
+Plot ACF setelah differencing menunjukkan adanya korelasi yang signifikan pada lag 1, kemudian korelasi pada lag berikutnya menurun dan tidak lagi signifikan. Pola tersebut mengindikasikan adanya komponen Moving Average orde 1, sehingga salah satu model kandidat yang dipertimbangkan adalah ARIMA(0,1,1).
+
+## Plot PACF
+```{r}
+pacf(train.diff, lag.max = 20, main = "PACF Diff-1")
+# PACF cuts off di lag 1 dan ACF tails off -> ARIMA(1,1,0)
+# Keduanya tails off -> ARIMA(1,1,1)
+```
+Plot PACF digunakan sebagai dasar untuk mengidentifikasi kemungkinan komponen autoregressive. Hasilnya menunjukkan adanya indikasi komponen AR orde 1 sehingga ARIMA(1,1,0) dan ARIMA(1,1,1) dipertimbangkan sebagai model kandidat.
+
+## Plot EACF
+```{r}
+TSA::eacf(train.diff)
+```
+Hasil EACF memberikan kandidat model ARIMA(0,1,1), ARIMA(1,1,0), dan ARIMA(1,1,1).
+
+# Pendugaan Parameter
+## ARIMA(0,1,1)
+```{r}
+model1 <- Arima(train.ts, order = c(0, 1, 1), method = "ML")
+summary(model1)
+coeftest(model1)      # signifikan jika p-value < 0.05
+```
+Pada model ARIMA(0,1,1), koefisien MA(1) sebesar -0,6428 dengan p-value sebesar 2,901 × 10⁻¹¹. Karena p-value lebih kecil dari 0,05, parameter MA(1) signifikan. Hal ini menunjukkan bahwa komponen moving average orde 1 memberikan kontribusi yang signifikan dalam menjelaskan perubahan harga setelah dilakukan differencing pertama.
+
+## ARIMA(1,1,0)
+```{r}
+model2 <- Arima(train.ts, order = c(1, 1, 0), method = "ML")
+summary(model2)
+coeftest(model2)
+```
+Model ARIMA(1,1,0) memiliki koefisien AR(1) sebesar -0,4836 dengan p-value sebesar 6,565 × 10⁻⁷. Karena p-value lebih kecil dari 0,05, parameter AR(1) signifikan. Dengan demikian, terdapat hubungan yang signifikan antara perubahan harga saat ini dengan perubahan harga pada satu periode sebelumnya.
+
+## 7.3 ARIMA(1,1,1)
+```{r}
+model3 <- Arima(train.ts, order = c(1, 1, 1), method = "ML")
+summary(model3)
+coeftest(model3)
+```
+Pada model ARIMA(1,1,1), parameter AR(1) sebesar -0,0580 tidak signifikan karena p-value sebesar 0,7801 lebih besar dari 0,05. Sementara itu, parameter MA(1) sebesar -0,5999 signifikan dengan p-value sebesar 0,001322. Hal ini menunjukkan bahwa penambahan komponen AR(1) belum memberikan kontribusi yang signifikan setelah komponen MA(1) dimasukkan ke dalam model.
+
+## AIC
+```{r}
+model_tentatif <- data.frame(
+  Model = c("ARIMA(0,1,1)", "ARIMA(1,1,0)", "ARIMA(1,1,1)"),
+  AIC   = c(AIC(model1), AIC(model2), AIC(model3)),
+  BIC   = c(BIC(model1), BIC(model2), BIC(model3))
+)
+model_tentatif[order(model_tentatif$AIC), ]
+```
+Berdasarkan perbandingan nilai AIC dan BIC, ARIMA(0,1,1) memiliki nilai AIC sebesar 402,38 dan BIC sebesar 407,12, yang merupakan nilai terendah dibandingkan model kandidat lainnya. Selain itu, parameter MA(1) pada model tersebut signifikan. Oleh karena itu, model ARIMA(0,1,1) digunakan sebagai model akhir.
+
+Model ARIMA(0,1,1) memiliki varians residual sebesar 9,124 dan menghasilkan nilai log likelihood sebesar -199,19. Nilai AIC sebesar 402,38, AICc sebesar 402,54, dan BIC sebesar 407,12 digunakan sebagai dasar evaluasi model. Pada data training, model menghasilkan RMSE sebesar 2,9826, MAE sebesar 1,4456, dan MAPE sebesar 2,7843%. Nilai MAPE tersebut menunjukkan bahwa secara in-sample kesalahan persentase rata-rata relatif kecil.
+
+# Analisis Sisaan
+```{r}
+best   <- model1
+sisaan <- residuals(best)
+```
+
+## Eksplorasi Sisaan
+```{r}
+par(mfrow = c(2, 2))
+car::qqPlot(as.numeric(sisaan), main = "Q-Q Plot Sisaan", ylab = "Sisaan")
+plot(c(1:length(sisaan)), sisaan, type = "p",
+     xlab = "Waktu", ylab = "Sisaan", main = "Sisaan vs Waktu")
+abline(h = 0, col = "red")
+acf(sisaan,  main = "ACF Sisaan")
+pacf(sisaan, main = "PACF Sisaan")
+par(mfrow = c(1, 1))
+
+hist(sisaan, breaks = 20, col = "lightblue", border = "white",
+     main = "Histogram Sisaan", xlab = "Sisaan")
+```
+Grafik residual menunjukkan bahwa residual berfluktuasi di sekitar nilai nol dan tidak menunjukkan pola sistematis yang jelas. Hal ini mengindikasikan bahwa model telah menangkap pola utama dalam data. Namun, terdapat beberapa residual yang cukup besar sehingga perlu diperiksa lebih lanjut melalui pengujian formal.
+
+```{r}
+checkresiduals(best)
+```
+
+# Uji Formal
+## Sisaan saling bebas/tidak ada autokorelasi
+```{r}
+for (lg in c(5, 10, 15, 20)) {
+  cat("Lag", lg, ": p-value =",
+      Box.test(sisaan, lag = lg, type = "Ljung-Box", fitdf = 1)$p.value, "\n")
+}
+```
+Hasil uji Ljung-Box pada lag 5, 10, 15, dan 20 menghasilkan p-value yang seluruhnya lebih besar dari 0,05. Dengan demikian, tidak terdapat bukti yang cukup untuk menolak hipotesis nol bahwa residual tidak memiliki autokorelasi. Artinya, residual dapat dianggap saling bebas dan model telah berhasil menangkap pola autokorelasi yang terdapat dalam data.
+
+## Kehomogenan ragam
+```{r}
+for (lg in c(5, 10, 15, 20)) {
+  cat("Lag", lg, ": p-value =",
+      Box.test(sisaan^2, lag = lg, type = "Ljung-Box")$p.value, "\n")
+}
+```
+Pengujian terhadap residual kuadrat menghasilkan p-value yang seluruhnya lebih besar dari 0,05. Dengan demikian, tidak terdapat bukti adanya autokorelasi pada residual kuadrat. Hal ini menunjukkan bahwa tidak terdapat pola perubahan varians yang sistematis pada residual, sehingga asumsi kehomogenan ragam dapat diterima.
+
+## Nilai tengah sisaan sama dengan nol
+```{r}
+t.test(sisaan, mu = 0, conf.level = 0.95)
+```
+Uji rata-rata residual menghasilkan p-value sebesar 0,335 yang lebih besar dari 0,05. Dengan demikian, tidak terdapat bukti yang cukup untuk menyatakan bahwa rata-rata residual berbeda dari nol. Hal ini menunjukkan bahwa secara rata-rata model tidak menghasilkan bias yang signifikan.
+
+## Sisaan terbesar
+```{r}
+head(order(abs(sisaan), decreasing = TRUE), 3)
+sisaan[head(order(abs(sisaan), decreasing = TRUE), 3)]
+```
+Residual terbesar terdapat pada observasi ke-49 dengan nilai 21,56. Residual yang besar tersebut berkaitan dengan perubahan harga yang ekstrem pada periode sekitar observasi tersebut
+
+# Overfitting
+```{r}
+model1a <- Arima(train.ts, order = c(1, 1, 1), method = "ML")
+summary(model1a)
+coeftest(model1a)   
+```
+```{r}
+model1b <- Arima(train.ts, order = c(0, 1, 2), method = "ML")
+summary(model1b)
+coeftest(model1b)      # ma2 tidak signifikan?
+```
+```{r}
+overfitting <- data.frame(
+  Model = c("ARIMA(0,1,1)", "ARIMA(1,1,1)", "ARIMA(0,1,2)"),
+  AIC   = c(AIC(model1), AIC(model1a), AIC(model1b)),
+  BIC   = c(BIC(model1), BIC(model1a), BIC(model1b))
+)
+overfitting
+```
+Hasil overfitting membandingkan tiga model, yaitu ARIMA(0,1,1), ARIMA(1,1,1), dan ARIMA(0,1,2). ARIMA(1,1,1) memiliki nilai AIC sebesar 404,30 dan BIC sebesar 411,41, sedangkan ARIMA(0,1,2) memiliki AIC sebesar 404,32 dan BIC sebesar 411,43. Kedua model tersebut memiliki nilai AIC dan BIC yang lebih besar dibandingkan ARIMA(0,1,1), yang memiliki AIC sebesar 402,38 dan BIC sebesar 407,12.
+
+Pada ARIMA(0,1,2), parameter tambahan MA(2) juga tidak signifikan dengan p-value sebesar 0,8008. Sementara itu, pada ARIMA(1,1,1), parameter tambahan AR(1) juga tidak signifikan dengan p-value sebesar 0,7801. Hal ini menunjukkan bahwa penambahan parameter tersebut tidak memberikan kontribusi yang signifikan terhadap model. Oleh karena itu, model yang lebih sederhana, yaitu ARIMA(0,1,1), tetap dipertahankan.
+
+## Model Terbaik
+```{r}
+summary(model1)
+coeftest(model1)
+```
+Berdasarkan nilai AIC dan BIC, ARIMA(0,1,1) dipilih sebagai model akhir karena memiliki nilai AIC dan BIC paling rendah. Selain itu, parameter MA(1) signifikan dengan p-value 2,901 × 10⁻¹¹. Hasil ini menunjukkan bahwa komponen MA(1) diperlukan dalam model, sedangkan penambahan parameter pada model yang lebih kompleks tidak memberikan perbaikan yang lebih baik.
+
+# Peramalan
+```{r}
+h <- length(test)                   # 20 periode
+ramalan <- forecast(model1, h = h)
+ramalan                             
+```
+```{r}
+plot(ramalan, main = "Ramalan ARIMA(0,1,1)", xlab = "Waktu", ylab = "Harga")
+lines(test.ts, col = "red", lwd = 2)
+legend("topright", legend = c("Ramalan", "Aktual (uji)"),
+       col = c("blue", "red"), lty = 1, lwd = 2, bty = "n")
+```
+Hasil peramalan ARIMA(0,1,1) menghasilkan nilai ramalan titik sebesar sekitar 48,01 ribu/kg untuk seluruh 20 periode ke depan. Ramalan yang relatif konstan menunjukkan bahwa model tidak memproyeksikan adanya tren kenaikan atau penurunan harga yang sistematis pada horizon peramalan. Sementara itu, interval prediksi semakin lebar seiring bertambahnya periode peramalan, yang menunjukkan bahwa ketidakpastian ramalan meningkat semakin jauh dari periode terakhir data latih.
+
+## Tabel aktual vs ramalan
+```{r}
+perbandingan <- data.frame(
+  Periode  = (81):100,
+  Aktual   = test,
+  Forecast = as.numeric(ramalan$mean),
+  Lo95     = as.numeric(ramalan$lower[, 2]),
+  Hi95     = as.numeric(ramalan$upper[, 2])
+)
+perbandingan$Galat <- perbandingan$Aktual - perbandingan$Forecast
+perbandingan
+```
+Berdasarkan perbandingan antara nilai aktual dan hasil ramalan, model menghasilkan ramalan yang relatif konstan pada sekitar 48,01 ribu/kg, sedangkan harga aktual mengalami fluktuasi yang cukup besar. Pada sebagian besar periode ketika harga aktual berada di bawah 48,01 ribu/kg, model menghasilkan error negatif, yang menunjukkan bahwa model cenderung melakukan overforecast pada periode tersebut. Perbedaan paling besar terjadi pada periode ke-99 dengan error sekitar -11,16 ribu/kg.
+
+## Akurasi
+```{r}
+accuracy(ramalan, test)   
+```
+Berdasarkan evaluasi pada data uji, model menghasilkan RMSE sebesar 7,1535, MAE sebesar 6,5893, dan MAPE sebesar 16,41%. Nilai error pada data uji lebih besar dibandingkan data latih, yang menunjukkan bahwa kemampuan model dalam melakukan prediksi pada data yang belum digunakan dalam estimasi lebih rendah dibandingkan performanya pada data latih. Secara khusus, MAPE sebesar 16,41% menunjukkan bahwa rata-rata kesalahan absolut peramalan berada pada sekitar 16,41% terhadap nilai aktual.
+
+## Persentase data uji yang jatuh di selang 95%
+```{r}
+mean(test >= perbandingan$Lo95 & test <= perbandingan$Hi95)
+```
+Dari 20 observasi data uji, sebanyak 75% nilai aktual berada di dalam interval prediksi 95%. Hal ini menunjukkan bahwa sebagian besar nilai aktual masih tercakup dalam interval prediksi, meskipun belum seluruh observasi berada di dalam interval tersebut.
+
+## Plot gabungan data penuh & ramalan
+```{r}
+gab <- data.frame(
+  Waktu = 1:100,
+  Harga = cabai$Harga
+)
+fc.df <- data.frame(
+  Waktu = (81):100,
+  Forecast = as.numeric(ramalan$mean),
+  Lo95 = perbandingan$Lo95,
+  Hi95 = perbandingan$Hi95
+)
+ggplot() +
+  geom_line(data = gab, aes(Waktu, Harga), color = "black") +
+  geom_ribbon(data = fc.df, aes(Waktu, ymin = Lo95, ymax = Hi95),
+              fill = "blue", alpha = 0.15) +
+  geom_line(data = fc.df, aes(Waktu, Forecast), color = "blue",
+            linetype = "dashed", linewidth = 1) +
+  geom_vline(xintercept = 80 + 0.5, linetype = "dotted") +
+  labs(title = "Aktual vs Ramalan ARIMA(0,1,1)", y = "Harga") +
+  theme_minimal()
+```
+Plot aktual dan ramalan menunjukkan bahwa model ARIMA(0,1,1) menghasilkan ramalan yang relatif konstan di sekitar 48,01. Pada beberapa periode, terutama ketika harga aktual mengalami penurunan, nilai ramalan berada di atas harga aktual sehingga model belum mampu mengikuti perubahan jangka pendek secara baik. Meskipun demikian, interval prediksi 95% mencakup sebagian besar variasi data dan semakin melebar pada horizon yang lebih jauh. Pada data uji, model menghasilkan RMSE sebesar 7,15, MAE sebesar 6,59, dan MAPE sebesar 16,41%.
+
+# Kesimpulan
+
+Berdasarkan hasil analisis deret waktu harga cabai merah, data terdiri dari 100 observasi dan menunjukkan adanya fluktuasi harga dari waktu ke waktu. Data awal belum memenuhi stasioneritas berdasarkan uji ADF, sehingga dilakukan *differencing* pertama. Setelah dilakukan *differencing*, data telah memenuhi stasioneritas sehingga diperoleh orde *differencing* $d=1$.
+
+Berdasarkan pola ACF, PACF, dan EACF, diperoleh beberapa model kandidat, yaitu ARIMA(0,1,1), ARIMA(1,1,0), dan ARIMA(1,1,1). Setelah dilakukan estimasi dan *overfitting*, model ARIMA(0,1,1) dipilih karena memiliki nilai AIC sebesar 402,38 dan BIC sebesar 407,12 yang lebih rendah dibandingkan model lainnya. Selain itu, parameter MA(1) pada model tersebut signifikan dengan *p-value* sebesar $2,901 \times 10^{-11}$.
+
+Hasil diagnostik menunjukkan bahwa residual model tidak memiliki autokorelasi berdasarkan uji Ljung-Box dan rata-rata residual tidak berbeda secara signifikan dari nol. Model ARIMA(0,1,1) kemudian digunakan untuk meramalkan 20 periode berikutnya dengan nilai ramalan sekitar 48,01. Pada data uji, model menghasilkan RMSE sebesar 7,15, MAE sebesar 6,59, dan MAPE sebesar 16,41%.
+
+Dengan demikian, model ARIMA(0,1,1) dapat digunakan untuk memodelkan dan meramalkan harga cabai merah pada data ini. Model mampu menangkap pola ketergantungan waktu pada data, tetapi hasil ramalan masih belum sepenuhnya mengikuti perubahan harga aktual yang cukup besar pada periode uji.
